@@ -1,0 +1,103 @@
+name: xeval
+
+on:
+  push:
+  pull_request:
+  schedule:
+    # Weekdays at 09:17 UTC. Scheduled workflows run only from the default branch.
+    - cron: "17 9 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      run_live:
+        description: Run the credentialed staging evaluation
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xeval-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+jobs:
+  test:
+    name: Offline validation and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package and development dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e '.[dev]'
+
+      - name: Validate the checked-in evaluation catalog
+        run: xeval validate --config evals/nightly.yaml
+
+      - name: Lint
+        run: python -m ruff check .
+
+      - name: Test
+        run: python -m pytest
+
+  live-eval:
+    name: Credentialed staging evaluation
+    needs: test
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_live)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    env:
+      XEVYO_STAGING_URL: ${{ secrets.XEVYO_STAGING_URL }}
+      XEVYO_JWT: ${{ secrets.XEVYO_JWT }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        run: python -m pip install --upgrade pip && python -m pip install -e '.[dev]'
+
+      - name: Check whether staging credentials are available
+        id: credentials
+        shell: bash
+        run: |
+          if [[ -n "$XEVYO_STAGING_URL" && -n "$XEVYO_JWT" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Live evaluation skipped: configure XEVYO_STAGING_URL and XEVYO_JWT in the staging environment."
+          fi
+
+      - name: Run staging evaluation
+        if: steps.credentials.outputs.available == 'true'
+        run: >-
+          xeval run --config evals/nightly.yaml
+          --fail-on-regression
+          --fail-on-thresholds
+
+      - name: Upload scorecard and run database
+        if: always() && steps.credentials.outputs.available == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: xeval-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/scorecard.html
+            artifacts/xeval.sqlite3
+          if-no-files-found: warn
+          retention-days: 30
