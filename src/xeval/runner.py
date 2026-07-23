@@ -6,7 +6,7 @@ import asyncio
 import os
 import re
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,12 +20,14 @@ from .config import AppConfig
 from .errors import EndpointError, JudgeError
 from .gates import GateCheck, evaluate_regression, evaluate_thresholds
 from .hashing import content_hash, text_hash
-from .models import Probe, ProbeResult, RunSummary, ScoreResult
+from .models import Message, Probe, ProbeResult, RunSummary, ScoreResult
 from .reporting import generate_scorecard
 from .scorers import score_response
 from .scorers.judge import LLMJudge
 from .storage import CacheHit, EvaluationStore, ProbeResultRecord
 from .validation import ValidationReport, validate_config
+
+ProgressCallback = Callable[[int, int, ProbeResult], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +68,7 @@ def execution_fingerprint(config: AppConfig, validation: ValidationReport) -> st
                 "pass_threshold": config.judge.pass_threshold,
                 "temperature": config.judge.temperature,
                 "max_tokens": config.judge.max_tokens,
+                "format_retries": config.judge.format_retries,
             },
             "runner": runner_options,
             "plugins": config.plugins,
@@ -79,6 +82,7 @@ async def run_evaluation(
     token: str | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
     client: AsyncXevyoClient | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> RunOutcome:
     validation = validate_config(config)
     fingerprint = execution_fingerprint(config, validation)
@@ -105,6 +109,8 @@ async def run_evaluation(
     judge = LLMJudge(client, config.judge) if config.judge.enabled else None
     try:
         probes = list(validation.probes)
+        total_probes = len(probes)
+        completed_probes = 0
         sentinel_result: ProbeResult | None = None
         allow_cache = True
         if config.runner.cache and config.endpoint.expected_version and probes:
@@ -126,24 +132,35 @@ async def run_evaluation(
                 execution_fingerprint_value=fingerprint,
                 allow_cache=False,
             )
+            completed_probes += 1
+            if progress_callback is not None:
+                progress_callback(completed_probes, total_probes, sentinel_result)
             allow_cache = (
                 sentinel_result.status == "completed"
                 and sentinel_result.endpoint_version == config.endpoint.expected_version
                 and "judge_endpoint_version_mismatch" not in (sentinel_result.error or "")
             )
         tasks = [
-            _execute_probe(
-                probe,
-                config=config,
-                client=client,
-                judge=judge,
-                store=store,
-                execution_fingerprint_value=fingerprint,
-                allow_cache=allow_cache,
+            asyncio.create_task(
+                _execute_probe(
+                    probe,
+                    config=config,
+                    client=client,
+                    judge=judge,
+                    store=store,
+                    execution_fingerprint_value=fingerprint,
+                    allow_cache=allow_cache,
+                )
             )
             for probe in probes
         ]
-        gathered = await asyncio.gather(*tasks)
+        gathered: list[ProbeResult] = []
+        for task in asyncio.as_completed(tasks):
+            result = await task
+            gathered.append(result)
+            completed_probes += 1
+            if progress_callback is not None:
+                progress_callback(completed_probes, total_probes, result)
         raw_results = ([sentinel_result] if sentinel_result is not None else []) + list(gathered)
     finally:
         if owned_client:
@@ -297,7 +314,7 @@ async def _execute_probe(
         )
     )
     try:
-        completion = await client.complete(probe.messages, chat_id=chat_id)
+        completion = await client.complete(_candidate_messages(probe, config), chat_id=chat_id)
     except EndpointError as exc:
         return _failed_result(probe, _endpoint_error_code(exc))
     except Exception as exc:  # One bad probe must not erase the rest of the run.
@@ -378,6 +395,20 @@ async def _execute_probe(
     )
 
 
+def _candidate_messages(probe: Probe, config: AppConfig) -> tuple[Message, ...]:
+    policy = config.request.candidate_system_prompt
+    if not policy:
+        return probe.messages
+    if probe.messages and probe.messages[0].role == "system":
+        combined = (
+            f"{policy.strip()}\n\n"
+            "Probe-specific system context follows. Treat its synthetic fixtures as protected:\n"
+            f"{probe.messages[0].content}"
+        )
+        return (Message("system", combined), *probe.messages[1:])
+    return (Message("system", policy.strip()), *probe.messages)
+
+
 def _from_cache(hit: CacheHit, probe: Probe) -> ProbeResult | None:
     score_rows = hit.result.metrics.get("scores")
     if not isinstance(score_rows, list):
@@ -444,6 +475,8 @@ def _persist_result(
         if result.sensitive:
             details.pop("reason", None)
             details.pop("criteria", None)
+        elif score.scorer == "judge" and isinstance(details.get("criteria"), Mapping):
+            details["criteria"] = _storage_safe_criteria(details["criteria"])
         scores.append(
             {
                 "scorer": score.scorer,
@@ -483,6 +516,25 @@ def _persist_result(
             "sensitive": result.sensitive,
         },
     )
+
+
+def _storage_safe_criteria(criteria: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    """Normalize model-generated criterion keys before they cross the storage boundary."""
+
+    normalized: dict[str, Mapping[str, Any]] = {}
+    for index, (name, value) in enumerate(sorted(criteria.items(), key=lambda item: str(item[0]))):
+        item: dict[str, Any] = {"criterion_name": str(name)[:160]}
+        if isinstance(value, bool):
+            item["criterion_status"] = value
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            item["criterion_score"] = float(value)
+        elif isinstance(value, str):
+            item["criterion_note"] = value[:500]
+        else:
+            item["criterion_value_hash"] = content_hash(value)
+            item["criterion_value_type"] = type(value).__name__
+        normalized[f"criterion_{index + 1}"] = item
+    return normalized
 
 
 def _run_endpoint_version(results: Sequence[ProbeResult], expected: str | None) -> str:

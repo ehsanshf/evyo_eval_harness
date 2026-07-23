@@ -16,6 +16,12 @@ from .scorers import available_scorers, load_plugins
 from .validation import validate_config
 
 
+def _print_probe_progress(completed: int, total: int, result: object) -> None:
+    probe_id = getattr(result, "probe_id", "unknown")
+    status = getattr(result, "status", "unknown")
+    print(f"[{completed}/{total}] {probe_id}: {status}", flush=True)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="xeval",
@@ -85,7 +91,7 @@ def cli(argv: Sequence[str] | None = None) -> int:
                 )
             if args.no_cache:
                 config = replace(config, runner=replace(config.runner, cache=False))
-            outcome = asyncio.run(run_evaluation(config))
+            outcome = asyncio.run(run_evaluation(config, progress_callback=_print_probe_progress))
             summary = outcome.summary
             progress = f"{summary.completed_count}/{len(summary.results)} completed"
             print(f"Run {summary.run_id}: {progress}, {summary.pass_rate:.1%} passed")

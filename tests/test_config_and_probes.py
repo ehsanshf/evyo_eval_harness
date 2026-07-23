@@ -130,11 +130,17 @@ def test_required_environment_values_fail_closed(
     [
         ("request", {"temperature": 2.1}, "temperature"),
         ("request", {"max_tokens": 0}, "max_tokens"),
+        (
+            "request",
+            {"candidate_prompt_version": "safety-v1"},
+            "must be set together",
+        ),
         ("runner", {"concurrency": 0}, "concurrency"),
         ("runner", {"rate_limit_per_minute": 0}, "rate limit"),
         ("runner", {"retries": -1}, "retries"),
         ("runner", {"timeout_seconds": 0}, "timeout"),
         ("judge", {"pass_threshold": 1.01}, "pass_threshold"),
+        ("judge", {"format_retries": 3}, "format_retries"),
         ("report", {"confidence_level": 1}, "confidence_level"),
         ("report", {"bootstrap_samples": 99}, "bootstrap_samples"),
         ("plugins", "not-a-list", "plugins"),

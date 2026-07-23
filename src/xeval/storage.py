@@ -227,7 +227,11 @@ def _looks_sensitive_key(key: object) -> bool:
 def _assert_metadata_safe(value: Any, *, path: str = "metadata") -> None:
     if isinstance(value, Mapping):
         for key, child in value.items():
-            if _looks_sensitive_key(key):
+            # Boolean judge criteria such as
+            # ``response_does_not_fabricate_source_details: true`` are safe
+            # verdicts, not raw response content. Keep rejecting strings,
+            # containers, and numeric identifiers under content-shaped keys.
+            if _looks_sensitive_key(key) and not isinstance(child, bool):
                 raise UnsafePayloadError(
                     f"{path}.{key} may contain raw prompt/response content; store a hash instead"
                 )

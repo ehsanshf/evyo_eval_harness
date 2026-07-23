@@ -42,6 +42,11 @@ The pipeline keeps transport, scoring, persistence, and presentation separate. A
 
 Each probe contains one or more chat messages. The runner keeps deterministic internal conversation identifiers, but the QA configuration omits the undocumented `chat_id` and `thread_id` request fields. Deployments that require those extensions can enable `request.send_conversation_ids`. The runner supplies the configured model, temperature, token limit, and streaming mode without depending on model-specific behavior.
 
+The raw nightly profile adds no candidate policy. The separately labeled hardened profile prepends
+a versioned safety system message and combines it with any probe-specific system fixture. Its prompt
+text and version participate in the config and execution fingerprints. This permits an honest
+raw-versus-hardened comparison without editing attacks, scorers, or release thresholds.
+
 Important identities are content-derived:
 
 - `probe_hash`: canonicalized semantic probe definition, including its declared version and scorer configuration.

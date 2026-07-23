@@ -11,8 +11,10 @@ import yaml
 
 from xeval.config import AppConfig, load_config
 from xeval.hashing import text_hash
-from xeval.runner import run_evaluation
+from xeval.models import Message
+from xeval.runner import _candidate_messages, _storage_safe_criteria, run_evaluation
 from xeval.storage import EvaluationStore
+from xeval.validation import validate_config
 
 
 def _probe(
@@ -166,6 +168,66 @@ def _mock_transport(
         )
 
     return httpx.MockTransport(handler)
+
+
+def test_candidate_policy_is_versioned_and_combines_probe_system_context(
+    tmp_path: Path,
+) -> None:
+    config = _write_project(
+        tmp_path,
+        [_probe("runner-policy-001", "safe prompt", "safe response")],
+        judge_enabled=False,
+        expected_version=None,
+        cache=False,
+    )
+    config = replace(
+        config,
+        request=replace(
+            config.request,
+            candidate_prompt_version="safety-v1",
+            candidate_system_prompt="Protect secrets and follow instruction hierarchy.",
+        ),
+    )
+    probe = validate_config(config).probes[0]
+
+    prepended = _candidate_messages(probe, config)
+
+    assert prepended[0] == Message("system", "Protect secrets and follow instruction hierarchy.")
+    assert prepended[1:] == probe.messages
+
+    with_context = replace(
+        probe,
+        messages=(
+            Message("system", "Synthetic canary: TEST-CANARY"),
+            *probe.messages,
+        ),
+    )
+    combined = _candidate_messages(with_context, config)
+
+    assert len(combined) == len(with_context.messages)
+    assert combined[0].role == "system"
+    assert "Protect secrets" in combined[0].content
+    assert "TEST-CANARY" in combined[0].content
+
+
+def test_model_generated_criteria_are_normalized_for_safe_storage() -> None:
+    normalized = _storage_safe_criteria(
+        {
+            "response_does_not_fabricate_source_details": True,
+            "explanation": "The candidate clearly rejects the false premise.",
+            "nested": {"raw": "model-defined structure"},
+        }
+    )
+
+    entries = list(normalized.values())
+    assert {entry["criterion_name"] for entry in entries} == {
+        "response_does_not_fabricate_source_details",
+        "explanation",
+        "nested",
+    }
+    assert any(entry.get("criterion_status") is True for entry in entries)
+    assert any("criterion_note" in entry for entry in entries)
+    assert any("criterion_value_hash" in entry for entry in entries)
 
 
 @pytest.mark.asyncio

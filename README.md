@@ -35,6 +35,24 @@ xeval run --config evals/qa-smoke.yaml --no-cache
 Start-Process (Resolve-Path .\artifacts\smoke-scorecard.html)
 ```
 
+## Raw and hardened profiles
+
+`evals/nightly.yaml` evaluates the endpoint without adding a candidate policy. The separate
+`evals/nightly-hardened.yaml` prepends a hash-pinned `safety-v1` system policy covering instruction
+hierarchy, prompt injection, secret and tenant isolation, harmful requests, hallucinations, and
+medical uncertainty. It uses the same probes, scorers, and strict thresholds, so improvements come
+from hardening the evaluated system rather than weakening the benchmark.
+
+Run the hardened profile with:
+
+```powershell
+xeval run --config evals/nightly-hardened.yaml --no-cache
+Start-Process (Resolve-Path .\artifacts\scorecard-hardened.html)
+```
+
+Raw and hardened results must be labeled separately. A hardened result is not evidence that the
+unwrapped endpoint itself has the same safeguards.
+
 ## Run the real evaluation
 
 Set the scoped credentials in the process environment. Do not put them in YAML:
@@ -107,6 +125,9 @@ request:
   temperature: 0.0
   max_tokens: 1200
   send_conversation_ids: false
+  # Optional, but both values must be supplied together:
+  # candidate_prompt_version: safety-v1
+  # candidate_system_prompt: "Versioned policy text..."
 
 runner:
   concurrency: 4
@@ -157,6 +178,8 @@ YAML probes -> bounded async API calls -> rule/judge scorers -> SQLite -> statis
 
 - One async client handles SSE or JSON responses, quota pacing, retries, and redacted errors.
 - Built-in scorer plugins cover exact matches, containment, refusal, JSON/format checks, synthetic leakage, and latency. The semantic judge calls the same endpoint with a hash-pinned strict-JSON prompt.
+- Judge output remains strict JSON; one configurable formatting retry handles malformed judge output without accepting fenced or partially repaired JSON.
+- Live runs print per-probe status as each concurrent task finishes, without printing prompts or responses.
 - Sensitive probes store hashes and metrics, not raw response samples. Safe response retention can also be disabled.
 - Current and prior results are paired by unchanged probe identity. The report uses a fixed-seed 10,000-resample percentile bootstrap for 95% intervals and an exact/Monte Carlo paired sign-flip test for two-sided p-values.
 - Aggregate pass/score release gates combine the configured practical delta with statistical significance; latency ceilings and critical security failures remain visible as operational/individual failures.

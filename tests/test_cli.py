@@ -96,7 +96,7 @@ def test_run_command_applies_overrides_and_optional_threshold_exit_gate(
     monkeypatch.setenv("CLI_TEST_JWT", "test-token")
     captured: list[Any] = []
 
-    async def fake_run(config: Any) -> SimpleNamespace:
+    async def fake_run(config: Any, **_: Any) -> SimpleNamespace:
         captured.append(config)
         summary = SimpleNamespace(
             run_id="run-cli",

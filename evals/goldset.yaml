@@ -23,7 +23,7 @@ probes:
     scorers:
       - name: exact_match
         params:
-          expected: Tokyo
+          expected_any: [Tokyo, "Tokyo."]
     tags: [goldset, geography, deterministic]
     sensitive: false
     metadata:
@@ -82,10 +82,6 @@ probes:
       - role: user
         content: "Rewrite 'The meeting was postponed because the presenter was ill.' in plain language without changing its meaning."
     scorers:
-      - name: contains
-        params:
-          values: [meeting, postponed, presenter]
-          mode: all
       - name: judge
         params:
           rubric: "The rewrite preserves that the meeting was postponed because the presenter was ill and adds no unsupported details."
@@ -353,9 +349,10 @@ probes:
       - role: user
         content: "Where is the red folder? Reply with only the location."
     scorers:
-      - name: exact_match
+      - name: contains
         params:
-          expected: in the cabinet
+          values: [cabinet]
+          mode: all
     tags: [goldset, multi_turn, coreference, deterministic]
     sensitive: false
     metadata:

@@ -106,3 +106,40 @@ async def test_llm_judge_rejects_invalid_per_probe_threshold_before_calling_endp
 
     with pytest.raises(JudgeError, match="threshold"):
         await judge.score("response", _probe(), {"threshold": 2})
+
+
+@pytest.mark.asyncio
+async def test_llm_judge_retries_strict_format_once() -> None:
+    class RetryClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        async def complete(self, messages: tuple[Message, ...], **kwargs: Any) -> EndpointResponse:
+            self.calls.append({"messages": messages, **kwargs})
+            text = "not json"
+            if len(self.calls) == 2:
+                text = json.dumps(
+                    {
+                        "score": 1.0,
+                        "passed": True,
+                        "reason": "Correct",
+                        "criteria": {"correct": True},
+                    }
+                )
+            return EndpointResponse(
+                text=text,
+                latency_ms=5,
+                endpoint_version="judge-v2",
+                status_code=200,
+                attempts=1,
+            )
+
+    client = RetryClient()
+    judge = LLMJudge(client, JudgeConfig(format_retries=1))  # type: ignore[arg-type]
+
+    result = await judge.score("Four", _probe(), {})
+
+    assert result.passed
+    assert result.details["judge_format_attempts"] == 2
+    assert len(client.calls) == 2
+    assert "strict formatting retry" in client.calls[1]["messages"][0].content

@@ -86,6 +86,34 @@ def test_unsafe_content_never_reaches_probe_results() -> None:
         assert store.get_probe_results("run-1") == []
 
 
+def test_boolean_judge_criteria_are_not_mistaken_for_raw_response_content() -> None:
+    with EvaluationStore(":memory:") as store:
+        store.create_run(
+            run_id="run-1",
+            endpoint_version="v1",
+            execution_fingerprint="exec",
+        )
+
+        result = store.record_probe_result(
+            run_id="run-1",
+            probe_hash="probe-sha",
+            metrics={
+                "scores": [
+                    {
+                        "details": {
+                            "criteria": {
+                                "response_does_not_fabricate_source_details": True,
+                            }
+                        }
+                    }
+                ]
+            },
+        )
+
+        criterion = result.metrics["scores"][0]["details"]["criteria"]
+        assert criterion["response_does_not_fabricate_source_details"] is True
+
+
 def test_cache_requires_the_complete_key_and_safe_response_marker() -> None:
     with EvaluationStore(":memory:") as store:
         store.create_run(

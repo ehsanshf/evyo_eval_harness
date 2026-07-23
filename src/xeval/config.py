@@ -33,6 +33,8 @@ class RequestConfig:
     temperature: float = 0.2
     max_tokens: int = 1500
     send_conversation_ids: bool = True
+    candidate_prompt_version: str | None = None
+    candidate_system_prompt: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +57,7 @@ class JudgeConfig:
     pass_threshold: float = 0.7
     temperature: float = 0.0
     max_tokens: int = 500
+    format_retries: int = 1
     system_prompt: str | None = None
 
 
@@ -274,13 +277,23 @@ def load_config(path: str | Path, *, require_credentials: bool = False) -> AppCo
             "temperature",
             "max_tokens",
             "send_conversation_ids",
+            "candidate_prompt_version",
+            "candidate_system_prompt",
         },
         "runner",
     )
     explicit_request_data = _mapping(raw.get("request"), "request")
     _reject_unknown(
         explicit_request_data,
-        {"model", "stream", "temperature", "max_tokens", "send_conversation_ids"},
+        {
+            "model",
+            "stream",
+            "temperature",
+            "max_tokens",
+            "send_conversation_ids",
+            "candidate_prompt_version",
+            "candidate_system_prompt",
+        },
         "request",
     )
     request_data = explicit_request_data or runner_data
@@ -293,6 +306,8 @@ def load_config(path: str | Path, *, require_credentials: bool = False) -> AppCo
             request_data.get("send_conversation_ids", True),
             "request.send_conversation_ids",
         ),
+        candidate_prompt_version=request_data.get("candidate_prompt_version"),
+        candidate_system_prompt=request_data.get("candidate_system_prompt"),
     )
     if not request.model.strip():
         raise ConfigurationError("request.model cannot be empty")
@@ -300,6 +315,10 @@ def load_config(path: str | Path, *, require_credentials: bool = False) -> AppCo
         raise ConfigurationError("request.temperature must be between 0 and 2")
     if request.max_tokens < 1:
         raise ConfigurationError("request.max_tokens must be positive")
+    if bool(request.candidate_prompt_version) != bool(request.candidate_system_prompt):
+        raise ConfigurationError(
+            "request.candidate_prompt_version and candidate_system_prompt must be set together"
+        )
 
     runner = RunnerOptions(
         concurrency=_as_int(runner_data.get("concurrency", 4), "runner.concurrency"),
@@ -345,6 +364,7 @@ def load_config(path: str | Path, *, require_credentials: bool = False) -> AppCo
             "pass_threshold",
             "temperature",
             "max_tokens",
+            "format_retries",
             "system_prompt",
         },
         "judge",
@@ -355,10 +375,13 @@ def load_config(path: str | Path, *, require_credentials: bool = False) -> AppCo
         pass_threshold=_as_float(judge_data.get("pass_threshold", 0.7), "judge.pass_threshold"),
         temperature=_as_float(judge_data.get("temperature", 0.0), "judge.temperature"),
         max_tokens=_as_int(judge_data.get("max_tokens", 500), "judge.max_tokens"),
+        format_retries=_as_int(judge_data.get("format_retries", 1), "judge.format_retries"),
         system_prompt=judge_data.get("system_prompt"),
     )
     if not 0 <= judge.pass_threshold <= 1:
         raise ConfigurationError("judge.pass_threshold must be between 0 and 1")
+    if not 0 <= judge.format_retries <= 2:
+        raise ConfigurationError("judge.format_retries must be between 0 and 2")
 
     report_data = _mapping(raw.get("report"), "report")
     storage_data = _mapping(raw.get("storage"), "storage")
