@@ -2,7 +2,7 @@
 
 `xeval` is a deterministic Python CLI that exercises the Xevyo staging chat endpoint from the outside. It runs a versioned 30-case goldset and 25 categorized red-team probes, scores each response, stores run history in SQLite, and produces a self-contained HTML scorecard with confidence intervals and paired significance against a comparable prior run.
 
-The harness needs only `POST /v2/chat/completions` and a scoped JWT. It does not use backend source, model weights, internal prompts, production data, Postgres, Redis, OpenSearch, a GPU, or an internal tool name.
+The harness supports OpenAI-compatible `/chat/completions` endpoints. The checked-in QA configuration uses `https://qa-chat.xevyo.com/xevyo/v1` with an `xk-` API key supplied only through the environment. It does not use backend source, model weights, internal prompts, production data, Postgres, Redis, OpenSearch, a GPU, or an internal tool name.
 
 > This repository contains no staging credentials and makes no live quality or latency claim. A real result exists only after a credentialed run completes against an identified endpoint version.
 
@@ -28,25 +28,30 @@ xeval validate --config evals/nightly.yaml
 
 Validation is offline. It loads all configured YAML, checks the probe schema and unique IDs, imports configured scorer plugins, and verifies scorer names without contacting staging.
 
+After configuring a fresh API key, use the documented non-streaming one-request smoke test before the full evaluation:
+
+```powershell
+xeval run --config evals/qa-smoke.yaml --no-cache
+Start-Process (Resolve-Path .\artifacts\smoke-scorecard.html)
+```
+
 ## Run the real evaluation
 
 Set the scoped credentials in the process environment. Do not put them in YAML:
 
 ```bash
-export XEVYO_STAGING_URL='https://staging.example.invalid'
-export XEVYO_JWT='replace-with-scoped-token'
+export XEVYO_API_KEY='replace-with-a-fresh-key'
 xeval run --config evals/nightly.yaml
 ```
 
 PowerShell:
 
 ```powershell
-$env:XEVYO_STAGING_URL = 'https://staging.example.invalid'
-$env:XEVYO_JWT = 'replace-with-scoped-token'
+$env:XEVYO_API_KEY = 'replace-with-a-fresh-key'
 xeval run --config evals/nightly.yaml
 ```
 
-The URL may be the service base or the full `/v2/chat/completions` URL. The checked-in config respects the shared 60 request/minute quota; candidate and judge calls use one limiter. `429` and transient server/network failures are retried with bounded backoff.
+The QA base URL is checked in because it is not a secret. `XEVYO_STAGING_URL` may override it with either another `/v1` or `/v2` base URL or a full `/chat/completions` URL. The QA service has been observed returning SSE even for `stream: false`; the client detects the response content type and decodes either JSON or SSE. The config paces candidate and judge calls through one 55-request/minute limiter; this is a client-side safety setting, not proof of the server's quota. `429` and transient server/network failures are retried with bounded backoff.
 
 Default outputs are:
 
@@ -91,8 +96,9 @@ version: 1
 name: nightly
 
 endpoint:
+  url: https://qa-chat.xevyo.com/xevyo/v1
   url_env: XEVYO_STAGING_URL
-  jwt_env: XEVYO_JWT
+  api_key_env: XEVYO_API_KEY
   version_header: X-Endpoint-Version
 
 request:
@@ -100,6 +106,7 @@ request:
   stream: true
   temperature: 0.0
   max_tokens: 1200
+  send_conversation_ids: false
 
 runner:
   concurrency: 4
@@ -131,7 +138,7 @@ suites:
   # ...remaining suite files
 ```
 
-`endpoint.url` may be used for a non-secret checked-in URL; `endpoint.url_env` is preferred across environments. `endpoint.jwt_env` names the environment variable containing the token, never the token itself. A top-level `plugins` list can name importable scorer modules:
+`endpoint.url` may contain a non-secret checked-in URL, and `endpoint.url_env` can override it across environments. `endpoint.api_key_env` names the environment variable containing the API key, never the key itself. Legacy JWT deployments can use `endpoint.jwt_env`; the two settings are mutually exclusive. A top-level `plugins` list can name importable scorer modules:
 
 ```yaml
 plugins:
@@ -160,7 +167,7 @@ The full architecture, threat taxonomy, determinism boundary, privacy decisions,
 
 `.github/workflows/eval.yml` runs offline validation, lint, and tests on pushes and pull requests. Pull requests never receive staging secrets and never call the endpoint.
 
-The live job runs only on the weekday schedule or a manual dispatch with `run_live` enabled. Configure `XEVYO_STAGING_URL` and `XEVYO_JWT` as secrets in the protected `staging` GitHub environment. When they are absent, the live step is explicitly skipped. The workflow uploads only the HTML scorecard and SQLite database for 30 days; it does not upload logs, environment dumps, or the JWT.
+The live job runs only on the weekday schedule or a manual dispatch with `run_live` enabled. Configure `XEVYO_API_KEY` as a secret in the protected `staging` GitHub environment; `XEVYO_STAGING_URL` is optional because the QA URL is checked in. When the key is absent, the live step is explicitly skipped. The workflow uploads only the HTML scorecard and SQLite database for 30 days; it does not upload logs, environment dumps, or credentials.
 
 ## Development
 
@@ -178,6 +185,7 @@ Offline tests should not require network access or credentials. Any real endpoin
 - Remote model serving may remain nondeterministic even with temperature `0.0`; the harness guarantees stable inputs, hashes, seeds, pairing, and report calculations, not byte-identical live responses.
 - LLM-as-a-judge output is not trustworthy as a release gate until the credentialed calibration protocol passes. Rule-based scorers remain preferable for exact requirements.
 - The catalog is meaningful regression coverage, not proof that all attacks, medical cases, or OWASP risks are covered.
+- The QA endpoint has returned standard OpenAI-style SSE framing through `data: ...` events ending in `data: [DONE]`, including when `stream: false` was requested. The endpoint-version header and stated 60-request/minute assignment quota remain unconfirmed.
 - Small slices have wide intervals and low power. “Not significant” is not evidence of equivalence.
 - Automatic PHI detection is not a security boundary. Never add real PHI or production data to a probe.
 - Static HTML is self-contained, not automatically safe for unrestricted public posting; review samples before sharing.

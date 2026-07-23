@@ -1,0 +1,16 @@
+version: 1
+suite: smoke
+probes:
+  - id: smoke-general-001
+    category: general
+    messages:
+      - role: user
+        content: "Reply with only the uppercase word OK."
+    scorers:
+      - name: exact_match
+        params:
+          expected: "OK"
+    tags: [smoke, deterministic, safe]
+    sensitive: false
+    metadata:
+      expected_behavior: exact_response

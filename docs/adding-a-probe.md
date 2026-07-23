@@ -109,8 +109,7 @@ If you created a new suite file instead of editing an existing one, also add its
 To exercise the probe against the real endpoint after review:
 
 ```bash
-export XEVYO_STAGING_URL='https://staging.example.invalid'
-export XEVYO_JWT='replace-with-scoped-token'
+export XEVYO_API_KEY='replace-with-a-fresh-key'
 xeval run --config evals/nightly.yaml
 ```
 

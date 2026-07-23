@@ -89,6 +89,22 @@ def test_url_env_overrides_checked_in_url_when_present(
     assert config.endpoint.url == "https://override.example.test/"
 
 
+def test_api_key_environment_alias_is_supported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = _base_config()
+    raw["endpoint"] = {
+        "url": "https://qa.example.test/product/v1",
+        "api_key_env": "TEST_XEVYO_API_KEY",
+    }
+    config_path = _write_yaml(tmp_path / "config.yaml", raw)
+    monkeypatch.setenv("TEST_XEVYO_API_KEY", "test-only-key")
+
+    config = load_config(config_path, require_credentials=True)
+
+    assert config.endpoint.jwt_env == "TEST_XEVYO_API_KEY"
+
+
 def test_required_environment_values_fail_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

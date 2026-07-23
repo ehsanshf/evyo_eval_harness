@@ -5,7 +5,7 @@ This runbook makes the day-5 demonstration repeatable. It is a script, not a rec
 ## Before the demo
 
 1. Install the package with `python -m pip install -e '.[dev]'`.
-2. Set `XEVYO_STAGING_URL` and the scoped `XEVYO_JWT` in the process environment.
+2. Set a fresh `XEVYO_API_KEY` in the process environment. Set `XEVYO_STAGING_URL` only to override the checked-in QA base URL.
 3. Confirm that no terminal command, shell history capture, screen recording, or environment dump exposes the token.
 4. Run `xeval validate --config evals/nightly.yaml`.
 5. For a release comparison, ensure the SQLite history contains a credentialed baseline captured before deployment, then run the current endpoint once. Two reruns of one endpoint version are a stability check, not a release comparison.

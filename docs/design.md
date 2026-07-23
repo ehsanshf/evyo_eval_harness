@@ -2,7 +2,7 @@
 
 ## Purpose and boundaries
 
-Xeval is a pure API consumer for the Xevyo staging `POST /v2/chat/completions` endpoint. It sends versioned YAML probes, scores the returned text, persists run history in SQLite, and renders a static HTML scorecard against a prior run. It does not require or assume backend source, model weights, internal prompts, internal tool names, databases, or production data.
+Xeval is a pure API consumer for OpenAI-compatible Xevyo staging chat-completion endpoints. The current QA configuration resolves to `POST /xevyo/v1/chat/completions`; the URL builder also supports a full completion URL and the assignment's `/v2/chat/completions` convention. It sends versioned YAML probes, scores the returned text, persists run history in SQLite, and renders a static HTML scorecard against a prior run. It does not require or assume backend source, model weights, internal prompts, internal tool names, databases, or production data.
 
 The system is deliberately not a product UI, a load tester, or a cross-vendor benchmark. It evaluates one endpoint contract from the outside. A result is evidence about the endpoint version observed during that run, not about an unnamed model or an internal component.
 
@@ -40,7 +40,7 @@ The pipeline keeps transport, scoring, persistence, and presentation separate. A
 
 ## Request and identity model
 
-Each probe contains one or more chat messages. A multi-turn probe reuses one `chat_id` for the whole conversation; unrelated probes never share it. The runner supplies the configured model, temperature, token limit, and streaming mode without depending on model-specific behavior.
+Each probe contains one or more chat messages. The runner keeps deterministic internal conversation identifiers, but the QA configuration omits the undocumented `chat_id` and `thread_id` request fields. Deployments that require those extensions can enable `request.send_conversation_ids`. The runner supplies the configured model, temperature, token limit, and streaming mode without depending on model-specific behavior.
 
 Important identities are content-derived:
 
@@ -185,7 +185,7 @@ Cache identity includes the probe hash, endpoint version, request-affecting conf
 ## Privacy and secret handling
 
 - Probe content must be synthetic or explicitly curated and must never contain real PHI, production data, access tokens, or customer identifiers.
-- By default JWTs enter through `XEVYO_JWT` and URLs through `XEVYO_STAGING_URL`; config may name alternate environment variables, but never contains the JWT value. Neither secret value belongs in YAML, SQLite, HTML, logs, cache keys, exceptions, or uploaded CI artifacts.
+- The current QA credential enters through `XEVYO_API_KEY`; legacy JWT deployments can name a JWT environment variable instead. `XEVYO_STAGING_URL` optionally overrides the checked-in QA URL. Credential values never belong in YAML, SQLite, HTML, logs, cache keys, exceptions, or uploaded CI artifacts.
 - Authorization headers are never emitted. Persisted diagnostics retain status, timing, hashes, and sanitized error classes, not request headers.
 - Cross-run deduplication uses content hashes. Raw PHI is never required for deduplication.
 - Regression response samples may echo their prompts. Therefore only synthetic probes are eligible for shareable scorecards, and scorecards must be reviewed before publication outside the authorized team.
@@ -199,4 +199,4 @@ The static scorecard is “public” in the sense that it is self-contained and 
 
 Absolute configured pass-rate/latency requirements and prior-run regression evidence are separate decisions. `--fail-on-thresholds` turns failed absolute gates into a non-zero CLI exit; `--fail-on-regression` does the same only when the paired score delta crosses both the practical and statistical thresholds. Scheduled CI enables both and still uploads the scorecard/database on failure.
 
-No live quality, latency, refusal-rate, judge-accuracy, or regression claim can be made from this repository alone. Those claims require `XEVYO_STAGING_URL`, `XEVYO_JWT`, a recorded endpoint version, and a completed run. The repository can demonstrate catalog coverage, deterministic plumbing, parser behavior, persistence, statistics, and report rendering with tests or synthetic fixtures.
+No live quality, latency, refusal-rate, judge-accuracy, or regression claim can be made from this repository alone. Those claims require a fresh `XEVYO_API_KEY`, a compatible response contract, a recorded endpoint version, and a completed run. The repository can demonstrate catalog coverage, deterministic plumbing, parser behavior, persistence, statistics, and report rendering with tests or synthetic fixtures.

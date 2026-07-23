@@ -20,18 +20,26 @@ def _client(
     retries: int = 0,
     sleep: Callable[[float], Awaitable[None]] | None = None,
     expected_version: str | None = None,
+    base_url: str = "https://staging.example.test",
+    send_conversation_ids: bool = True,
 ) -> AsyncXevyoClient:
     async def no_sleep(_: float) -> None:
         return None
 
     return AsyncXevyoClient(
         EndpointConfig(
-            url="https://staging.example.test",
+            url=base_url,
             jwt_env="TEST_JWT",
             version_header="X-Service-Version",
             expected_version=expected_version,
         ),
-        RequestConfig(model="fixture-model", stream=True, temperature=0.2, max_tokens=50),
+        RequestConfig(
+            model="fixture-model",
+            stream=True,
+            temperature=0.2,
+            max_tokens=50,
+            send_conversation_ids=send_conversation_ids,
+        ),
         RunnerOptions(retries=retries, concurrency=2, rate_limit_per_minute=60),
         "credential-secret",
         transport=httpx.MockTransport(handler),
@@ -72,6 +80,7 @@ async def test_streaming_completion_parses_sse_and_sends_expected_contract() -> 
     assert result.attempts == 1
     assert str(requests[0].url) == "https://staging.example.test/v2/chat/completions"
     assert requests[0].headers["authorization"] == "Bearer credential-secret"
+    assert requests[0].headers["accept"] == "text/event-stream"
     body = json.loads(requests[0].content)
     assert body == {
         "model": "fixture-model",
@@ -86,7 +95,10 @@ async def test_streaming_completion_parses_sse_and_sends_expected_contract() -> 
 
 @pytest.mark.asyncio
 async def test_non_streaming_completion_parses_message_parts_and_usage() -> None:
-    def handler(_: httpx.Request) -> httpx.Response:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
         return httpx.Response(
             200,
             headers={"X-Service-Version": "endpoint-v8"},
@@ -111,6 +123,58 @@ async def test_non_streaming_completion_parses_message_parts_and_usage() -> None
     assert result.text == "part one and two"
     assert result.endpoint_version == "endpoint-v8"
     assert result.raw_usage == {"prompt_tokens": 4, "completion_tokens": 3}
+    assert requests[0].headers["accept"] == "application/json"
+
+
+@pytest.mark.asyncio
+async def test_openai_v1_base_url_and_undocumented_ids_can_be_omitted() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    async with _client(
+        handler,
+        base_url="https://qa.example.test/product/v1",
+        send_conversation_ids=False,
+    ) as client:
+        await client.complete(
+            (Message("user", "hello"),),
+            chat_id="internal-chat",
+            thread_id="internal-thread",
+            stream=False,
+        )
+
+    assert str(requests[0].url) == "https://qa.example.test/product/v1/chat/completions"
+    body = json.loads(requests[0].content)
+    assert "chat_id" not in body
+    assert "thread_id" not in body
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_request_accepts_server_forced_sse() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["stream"] is False
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream; charset=utf-8"},
+            content=(
+                b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+                b'data: {"choices":[{"delta":{"content":"OK "}}]}\n\n'
+                b'data: {"choices":[{"delta":{"content":"\\n"}}]}\n\n'
+                b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+                b"data: [DONE]\n\n"
+            ),
+        )
+
+    async with _client(handler, send_conversation_ids=False) as client:
+        result = await client.complete(
+            (Message("user", "hello"),), chat_id="internal-chat", stream=False
+        )
+
+    assert result.text == "OK \n"
 
 
 @pytest.mark.asyncio

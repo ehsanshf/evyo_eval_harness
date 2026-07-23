@@ -1,8 +1,9 @@
 version: 1
 name: nightly
 endpoint:
-  url: "${XEVYO_STAGING_URL}"
-  jwt_env: XEVYO_JWT
+  url: "https://qa-chat.xevyo.com/xevyo/v1"
+  url_env: XEVYO_STAGING_URL
+  api_key_env: XEVYO_API_KEY
   version_header: X-Endpoint-Version
 model: xevyo
 suites:
@@ -22,6 +23,7 @@ run:
   backoff_max_seconds: 30.0
   temperature: 0.0
   max_tokens: 1200
+  send_conversation_ids: false
   seed: 2026
   cache: true
   fail_on_partial: true

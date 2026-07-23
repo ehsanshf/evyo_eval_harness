@@ -59,7 +59,7 @@ jobs:
     environment: staging
     env:
       XEVYO_STAGING_URL: ${{ secrets.XEVYO_STAGING_URL }}
-      XEVYO_JWT: ${{ secrets.XEVYO_JWT }}
+      XEVYO_API_KEY: ${{ secrets.XEVYO_API_KEY }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -77,11 +77,11 @@ jobs:
         id: credentials
         shell: bash
         run: |
-          if [[ -n "$XEVYO_STAGING_URL" && -n "$XEVYO_JWT" ]]; then
+          if [[ -n "$XEVYO_API_KEY" ]]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Live evaluation skipped: configure XEVYO_STAGING_URL and XEVYO_JWT in the staging environment."
+            echo "::notice::Live evaluation skipped: configure XEVYO_API_KEY in the staging environment."
           fi
 
       - name: Run staging evaluation

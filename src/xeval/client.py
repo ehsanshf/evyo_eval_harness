@@ -52,8 +52,10 @@ class SlidingWindowRateLimiter:
 
 def _completion_url(value: str) -> str:
     url = value.rstrip("/")
-    if url.endswith("/v2/chat/completions"):
+    if url.endswith("/chat/completions"):
         return url
+    if url.endswith(("/v1", "/v2")):
+        return f"{url}/chat/completions"
     return f"{url}/v2/chat/completions"
 
 
@@ -130,7 +132,7 @@ class AsyncXevyoClient:
         if not endpoint.url:
             raise EndpointError("endpoint URL is empty")
         if not token:
-            raise EndpointError(f"JWT environment variable {endpoint.jwt_env} is empty")
+            raise EndpointError(f"credential environment variable {endpoint.jwt_env} is empty")
         self.endpoint = endpoint
         self.request = request
         self.options = options
@@ -145,7 +147,7 @@ class AsyncXevyoClient:
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
-                "Accept": "text/event-stream, application/json",
+                "Accept": "application/json",
                 "User-Agent": "xeval/0.1",
             },
         )
@@ -175,12 +177,13 @@ class AsyncXevyoClient:
             "model": self.request.model,
             "messages": [message.as_dict() for message in messages],
             "stream": use_stream,
-            "chat_id": chat_id,
             "temperature": self.request.temperature if temperature is None else temperature,
             "max_tokens": self.request.max_tokens if max_tokens is None else max_tokens,
         }
-        if thread_id:
-            body["thread_id"] = thread_id
+        if self.request.send_conversation_ids:
+            body["chat_id"] = chat_id
+            if thread_id:
+                body["thread_id"] = thread_id
         async with self._semaphore:
             return await self._send_with_retries(body, use_stream)
 
@@ -224,7 +227,9 @@ class AsyncXevyoClient:
     async def _stream_request(
         self, body: dict[str, Any], started: float, attempt: int
     ) -> EndpointResponse:
-        async with self._client.stream("POST", self._url, json=body) as response:
+        async with self._client.stream(
+            "POST", self._url, json=body, headers={"Accept": "text/event-stream"}
+        ) as response:
             await self._check_status(response)
             parts: list[str] = []
             event_data: list[str] = []
@@ -250,8 +255,16 @@ class AsyncXevyoClient:
     async def _json_request(
         self, body: dict[str, Any], started: float, attempt: int
     ) -> EndpointResponse:
-        response = await self._client.post(self._url, json=body)
+        response = await self._client.post(
+            self._url, json=body, headers={"Accept": "application/json"}
+        )
         await self._check_status(response)
+        content_type = response.headers.get("content-type", "").partition(";")[0].strip().lower()
+        if content_type == "text/event-stream":
+            text = self._buffered_sse_text(response.text)
+            if not text:
+                raise EndpointError("stream completed without response content")
+            return self._result(response, text, started, attempt)
         try:
             payload = response.json()
         except json.JSONDecodeError as exc:
@@ -260,6 +273,28 @@ class AsyncXevyoClient:
         if not text:
             raise EndpointError("JSON response did not contain completion text")
         return self._result(response, text, started, attempt, payload)
+
+    @classmethod
+    def _buffered_sse_text(cls, body: str) -> str:
+        """Decode a completed SSE body returned despite a non-streaming request."""
+
+        parts: list[str] = []
+        event_data: list[str] = []
+        for line in body.splitlines():
+            if line == "":
+                if event_data:
+                    done = cls._consume_sse_event("\n".join(event_data), parts)
+                    event_data.clear()
+                    if done:
+                        break
+                continue
+            if line.startswith(":"):
+                continue
+            if line.startswith("data:"):
+                event_data.append(line[5:].lstrip())
+        if event_data:
+            cls._consume_sse_event("\n".join(event_data), parts)
+        return "".join(parts)
 
     async def _check_status(self, response: httpx.Response) -> None:
         if response.status_code == 429 or 500 <= response.status_code < 600:

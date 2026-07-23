@@ -32,6 +32,7 @@ class RequestConfig:
     stream: bool = True
     temperature: float = 0.2
     max_tokens: int = 1500
+    send_conversation_ids: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,7 +220,15 @@ def load_config(path: str | Path, *, require_credentials: bool = False) -> AppCo
     endpoint_data = _mapping(raw.get("endpoint"), "endpoint")
     _reject_unknown(
         endpoint_data,
-        {"url", "url_env", "env", "jwt_env", "version_header", "expected_version"},
+        {
+            "url",
+            "url_env",
+            "env",
+            "jwt_env",
+            "api_key_env",
+            "version_header",
+            "expected_version",
+        },
         "endpoint",
     )
     url = endpoint_data.get("url")
@@ -229,12 +238,18 @@ def load_config(path: str | Path, *, require_credentials: bool = False) -> AppCo
     url = _resolve_env_literal(url or "${XEVYO_STAGING_URL}", required=require_credentials)
     if require_credentials and not url:
         raise ConfigurationError("endpoint URL is empty")
-    jwt_env = str(endpoint_data.get("jwt_env", "XEVYO_JWT"))
-    if require_credentials and not os.getenv(jwt_env):
-        raise ConfigurationError(f"required environment variable {jwt_env} is not set")
+    if "jwt_env" in endpoint_data and "api_key_env" in endpoint_data:
+        raise ConfigurationError("endpoint may define jwt_env or api_key_env, not both")
+    credential_env = str(
+        endpoint_data.get("api_key_env", endpoint_data.get("jwt_env", "XEVYO_JWT"))
+    )
+    if require_credentials and not os.getenv(credential_env):
+        raise ConfigurationError(f"required environment variable {credential_env} is not set")
     endpoint = EndpointConfig(
         url=str(url),
-        jwt_env=jwt_env,
+        # Kept as jwt_env internally for backwards compatibility with existing
+        # configurations. It may name either a JWT or an OpenAI-style API key.
+        jwt_env=credential_env,
         version_header=str(endpoint_data.get("version_header", "x-xevyo-version")).lower(),
         expected_version=endpoint_data.get("expected_version"),
     )
@@ -258,13 +273,14 @@ def load_config(path: str | Path, *, require_credentials: bool = False) -> AppCo
             "stream",
             "temperature",
             "max_tokens",
+            "send_conversation_ids",
         },
         "runner",
     )
     explicit_request_data = _mapping(raw.get("request"), "request")
     _reject_unknown(
         explicit_request_data,
-        {"model", "stream", "temperature", "max_tokens"},
+        {"model", "stream", "temperature", "max_tokens", "send_conversation_ids"},
         "request",
     )
     request_data = explicit_request_data or runner_data
@@ -273,6 +289,10 @@ def load_config(path: str | Path, *, require_credentials: bool = False) -> AppCo
         stream=_as_bool(request_data.get("stream", True), "request.stream"),
         temperature=_as_float(request_data.get("temperature", 0.2), "request.temperature"),
         max_tokens=_as_int(request_data.get("max_tokens", 1500), "request.max_tokens"),
+        send_conversation_ids=_as_bool(
+            request_data.get("send_conversation_ids", True),
+            "request.send_conversation_ids",
+        ),
     )
     if not request.model.strip():
         raise ConfigurationError("request.model cannot be empty")
